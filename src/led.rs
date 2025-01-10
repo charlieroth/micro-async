@@ -1,8 +1,4 @@
-use crate::{
-    button::ButtonDirection,
-    channel::Receiver,
-    time::{Ticker, Timer},
-};
+use crate::{button::ButtonDirection, channel::Receiver, time::Timer};
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 use fugit::ExtU64;
 use microbit::{
@@ -11,16 +7,15 @@ use microbit::{
 };
 use rtt_target::rprintln;
 
-enum LedState<'a> {
+enum LedState {
     Toggle,
-    Wait(Timer<'a>),
+    Wait(Timer),
 }
 
 pub struct LedTask<'a> {
     col: [Pin<Output<PushPull>>; NUM_COLS],
     active_col: usize,
-    ticker: &'a Ticker,
-    state: LedState<'a>,
+    state: LedState,
     receiver: Receiver<'a, ButtonDirection>,
 }
 
@@ -32,13 +27,11 @@ impl<'a> LedTask<'a> {
     /// the acitve LED will "shift" accordingly
     pub fn new(
         col: [Pin<Output<PushPull>>; NUM_COLS],
-        ticker: &'a Ticker,
         receiver: Receiver<'a, ButtonDirection>,
     ) -> Self {
         Self {
             col,
             active_col: 0,
-            ticker,
             state: LedState::Toggle,
             receiver,
         }
@@ -47,9 +40,8 @@ impl<'a> LedTask<'a> {
     pub fn poll(&mut self) {
         match self.state {
             LedState::Toggle => {
-                rprintln!("Blinking LED {}", self.active_col);
-                self.col[self.active_col].toggle().ok();
-                self.state = LedState::Wait(Timer::new(500.millis(), &self.ticker));
+                self.toggle();
+                self.state = LedState::Wait(Timer::new(500.millis()));
             }
             LedState::Wait(ref timer) => {
                 if timer.is_ready() {
@@ -61,6 +53,21 @@ impl<'a> LedTask<'a> {
                 }
             }
         }
+    }
+
+    fn toggle(&mut self) {
+        rprintln!("Blinking LED {}", self.active_col);
+        #[cfg(feature = "trigger-overflow")]
+        {
+            use crate::time::Ticker;
+            let time = Ticker::now();
+            rprintln!(
+                "Time: 0x{:x} ticks, {} ms",
+                time.ticks(),
+                time.duration_since_epoch().to_millis(),
+            );
+        }
+        self.col[self.active_col].toggle().ok();
     }
 
     fn shift(&mut self, direction: ButtonDirection) {

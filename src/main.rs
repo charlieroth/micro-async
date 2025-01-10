@@ -19,8 +19,8 @@ use time::Ticker;
 #[entry]
 fn main() -> ! {
     rtt_init_print!();
-    let board = Board::take().unwrap();
-    let ticker = Ticker::new(board.RTC0);
+    let mut board = Board::take().unwrap();
+    Ticker::init(board.RTC0, &mut board.NVIC);
 
     let left_button = board.buttons.button_a.degrade();
     let right_button = board.buttons.button_b.degrade();
@@ -29,19 +29,11 @@ fn main() -> ! {
     row[0].set_high().ok();
 
     let channel: Channel<ButtonDirection> = Channel::new();
-    let mut led_task = LedTask::new(col, &ticker, channel.get_receiver());
-    let mut left_button_task = ButtonTask::new(
-        left_button,
-        &ticker,
-        ButtonDirection::Left,
-        channel.get_sender(),
-    );
-    let mut right_button_task = ButtonTask::new(
-        right_button,
-        &ticker,
-        ButtonDirection::Right,
-        channel.get_sender(),
-    );
+    let mut led_task = LedTask::new(col, channel.get_receiver());
+    let mut left_button_task =
+        ButtonTask::new(left_button, ButtonDirection::Left, channel.get_sender());
+    let mut right_button_task =
+        ButtonTask::new(right_button, ButtonDirection::Right, channel.get_sender());
 
     // Create an event loop which polls each task every loop and performs
     // the appropriate state change based on the states of the tasks.
