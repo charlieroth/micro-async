@@ -1,4 +1,8 @@
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::{
+    future::poll_fn,
+    sync::atomic::{AtomicUsize, Ordering},
+    task::Poll,
+};
 
 use embedded_hal::digital::{InputPin, PinState};
 use microbit::{
@@ -9,21 +13,14 @@ use microbit::{
     pac::{interrupt, Interrupt, NVIC},
 };
 
-use crate::{
-    executor::wake_task,
-    future::{MicroFuture, MicroPoll},
-};
+use crate::executor::{wake_task, ExtWaker};
 
-const INVALID_TASK_ID: usize = 0xFFFF_FFFF;
-const DEFAULT_TASK: AtomicUsize = AtomicUsize::new(INVALID_TASK_ID);
 const MAX_CHANNELS_USED: usize = 2;
 static NEXT_CHANNEL: AtomicUsize = AtomicUsize::new(0);
-static WAKE_TASKS: [AtomicUsize; MAX_CHANNELS_USED] = [DEFAULT_TASK; MAX_CHANNELS_USED];
 
 pub struct InputChannel {
     pin: Pin<Input<Floating>>,
     channel_id: usize,
-    ready_state: PinState,
 }
 
 impl InputChannel {
@@ -32,41 +29,38 @@ impl InputChannel {
         let channel = match channel_id {
             0 => gpiote.channel0(),
             1 => gpiote.channel1(),
-            MAX_CHANNELS_USED.. => todo!("Setup up more channels!"),
+            MAX_CHANNELS_USED.. => todo!("Setup more channels!"),
         };
         channel.input_pin(&pin).toggle().enable_interrupt();
-        // NOTE(charlieroth): Not using mask-based critical sections
+        // SAFETY:
+        // We aren't using mask-based critical sections.
         unsafe {
             NVIC::unmask(Interrupt::GPIOTE);
         }
-        Self {
-            pin,
-            channel_id,
-            ready_state: PinState::Low,
-        }
+        Self { pin, channel_id }
     }
 
-    pub fn set_ready_state(&mut self, ready_state: PinState) {
-        self.ready_state = ready_state;
-    }
-}
-
-impl MicroFuture for InputChannel {
-    type Output = ();
-
-    fn poll(&mut self, task_id: usize) -> MicroPoll<Self::Output> {
-        if self.ready_state == PinState::from(self.pin.is_high().unwrap()) {
-            MicroPoll::Ready(())
-        } else {
-            WAKE_TASKS[self.channel_id].store(task_id, Ordering::Relaxed);
-            MicroPoll::Pending
-        }
+    pub async fn wait_for(&mut self, ready_state: PinState) {
+        poll_fn(|cx| {
+            if ready_state == PinState::from(self.pin.is_high().unwrap()) {
+                Poll::Ready(())
+            } else {
+                WAKE_TASKS[self.channel_id].store(cx.waker().task_id(), Ordering::Relaxed);
+                Poll::Pending
+            }
+        })
+        .await
     }
 }
+
+const INVALID_TASK_ID: usize = 0xFFFF_FFFF;
+const DEFAULT_TASK: AtomicUsize = AtomicUsize::new(INVALID_TASK_ID);
+static WAKE_TASKS: [AtomicUsize; MAX_CHANNELS_USED] = [DEFAULT_TASK; MAX_CHANNELS_USED];
 
 #[interrupt]
 fn GPIOTE() {
-    // Use limited to `events_in` register which is not accessed elsewhere
+    // SAFETY:
+    // Use limited to `events_in` register, which is not accessed elsewhere.
     let gpiote = unsafe { &*microbit::pac::GPIOTE::ptr() };
     for (channel, task) in WAKE_TASKS.iter().enumerate() {
         if gpiote.events_in[channel].read().bits() != 0 {
@@ -80,5 +74,6 @@ fn GPIOTE() {
         }
     }
     // Dummy read to ensure event flags clear
+    // (see nRF52833 Product Specification section 6.1.8)
     let _ = gpiote.events_in[0].read().bits();
 }

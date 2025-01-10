@@ -1,8 +1,12 @@
 use core::{
     cell::{RefCell, RefMut},
+    future::Future,
+    pin::Pin,
     sync::atomic::{AtomicU32, Ordering},
+    task::{Context, Poll},
 };
 use critical_section::Mutex;
+use fugit::{Duration, Instant};
 use heapless::{binary_heap::Min, BinaryHeap};
 use microbit::{
     hal::{
@@ -12,13 +16,10 @@ use microbit::{
     pac::{interrupt, NVIC, RTC0},
 };
 
-use crate::{
-    executor::wake_task,
-    future::{MicroFuture, MicroPoll},
-};
+use crate::executor::{wake_task, ExtWaker};
 
-type TickInstant = fugit::Instant<u64, 1, 32768>;
-type TickDuration = fugit::Duration<u64, 1, 32768>;
+type TickInstant = Instant<u64, 1, 32768>;
+type TickDuration = Duration<u64, 1, 32768>;
 
 const MAX_DEADLINES: usize = 8;
 static WAKE_DEADLINES: Mutex<RefCell<BinaryHeap<(u64, usize), Min, MAX_DEADLINES>>> =
@@ -86,25 +87,29 @@ impl Timer {
     }
 }
 
-impl MicroFuture for Timer {
+impl Future for Timer {
     type Output = ();
 
-    fn poll(&mut self, task_id: usize) -> MicroPoll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state {
             TimerState::Init => {
-                self.register(task_id);
+                self.register(cx.waker().task_id());
                 self.state = TimerState::Wait;
-                MicroPoll::Pending
+                Poll::Pending
             }
             TimerState::Wait => {
                 if Ticker::now() >= self.end_time {
-                    MicroPoll::Ready(())
+                    Poll::Ready(())
                 } else {
-                    MicroPoll::Pending
+                    Poll::Pending
                 }
             }
         }
     }
+}
+
+pub async fn delay(duration: TickDuration) {
+    Timer::new(duration).await;
 }
 
 static TICKER: Ticker = Ticker {
@@ -177,8 +182,12 @@ fn RTC0() {
             rtc.reset_event(RtcInterrupt::Overflow);
             TICKER.ovf_count.fetch_add(1, Ordering::Relaxed);
         }
-        // Clearing the event flag can take up to 4 clock cycles
-        // this should do that
-        let _ = rtc.is_event_triggered(RtcInterrupt::Overflow);
+        if rtc.is_event_triggered(RtcInterrupt::Compare0) {
+            rtc.reset_event(RtcInterrupt::Compare0);
+        }
+
+        // For OVF & COMPARE0 events, schedule the next wakeup. This should also
+        // kill enough clock cycles to allow the event flags to clear
+        schedule_wakeups(WAKE_DEADLINES.borrow_ref_mut(cs), rm_rtc);
     });
 }
