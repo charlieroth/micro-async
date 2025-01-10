@@ -3,6 +3,9 @@
 
 mod button;
 mod channel;
+mod executor;
+mod future;
+mod gpiote;
 mod led;
 mod time;
 
@@ -10,8 +13,9 @@ use button::{ButtonDirection, ButtonTask};
 use channel::Channel;
 use cortex_m_rt::entry;
 use embedded_hal::digital::OutputPin;
+use future::MicroFuture;
 use led::LedTask;
-use microbit::Board;
+use microbit::{hal::gpiote::Gpiote, Board};
 use panic_rtt_target as _;
 use rtt_target::rtt_init_print;
 use time::Ticker;
@@ -21,6 +25,7 @@ fn main() -> ! {
     rtt_init_print!();
     let mut board = Board::take().unwrap();
     Ticker::init(board.RTC0, &mut board.NVIC);
+    let gpiote = Gpiote::new(board.GPIOTE);
 
     let left_button = board.buttons.button_a.degrade();
     let right_button = board.buttons.button_b.degrade();
@@ -30,16 +35,20 @@ fn main() -> ! {
 
     let channel: Channel<ButtonDirection> = Channel::new();
     let mut led_task = LedTask::new(col, channel.get_receiver());
-    let mut left_button_task =
-        ButtonTask::new(left_button, ButtonDirection::Left, channel.get_sender());
-    let mut right_button_task =
-        ButtonTask::new(right_button, ButtonDirection::Right, channel.get_sender());
+    let mut left_button_task = ButtonTask::new(
+        left_button,
+        ButtonDirection::Left,
+        channel.get_sender(),
+        &gpiote,
+    );
+    let mut right_button_task = ButtonTask::new(
+        right_button,
+        ButtonDirection::Right,
+        channel.get_sender(),
+        &gpiote,
+    );
 
-    // Create an event loop which polls each task every loop and performs
-    // the appropriate state change based on the states of the tasks.
-    loop {
-        led_task.poll();
-        left_button_task.poll();
-        right_button_task.poll();
-    }
+    let mut tasks: [&mut dyn MicroFuture<Output = ()>; 3] =
+        [&mut led_task, &mut left_button_task, &mut right_button_task];
+    executor::run_tasks(&mut tasks);
 }

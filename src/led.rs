@@ -1,4 +1,9 @@
-use crate::{button::ButtonDirection, channel::Receiver, time::Timer};
+use crate::{
+    button::ButtonDirection,
+    channel::Receiver,
+    future::{MicroFuture, MicroPoll},
+    time::Timer,
+};
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 use fugit::ExtU64;
 use microbit::{
@@ -37,24 +42,6 @@ impl<'a> LedTask<'a> {
         }
     }
 
-    pub fn poll(&mut self) {
-        match self.state {
-            LedState::Toggle => {
-                self.toggle();
-                self.state = LedState::Wait(Timer::new(500.millis()));
-            }
-            LedState::Wait(ref timer) => {
-                if timer.is_ready() {
-                    self.state = LedState::Toggle;
-                }
-                if let Some(direction) = self.receiver.receive() {
-                    self.shift(direction);
-                    self.state = LedState::Toggle;
-                }
-            }
-        }
-    }
-
     fn toggle(&mut self) {
         rprintln!("Blinking LED {}", self.active_col);
         #[cfg(feature = "trigger-overflow")]
@@ -83,5 +70,33 @@ impl<'a> LedTask<'a> {
         };
         // switch off new LED: moving Toggle will then switch on
         self.col[self.active_col].set_high().ok();
+    }
+}
+
+impl MicroFuture for LedTask<'_> {
+    type Output = ();
+
+    fn poll(&mut self, task_id: usize) -> MicroPoll<Self::Output> {
+        loop {
+            match self.state {
+                LedState::Toggle => {
+                    self.toggle();
+                    self.state = LedState::Wait(Timer::new(500.millis()));
+                }
+                LedState::Wait(ref mut timer) => {
+                    if let MicroPoll::Ready(_) = timer.poll(task_id) {
+                        self.state = LedState::Toggle;
+                        continue;
+                    }
+                    if let MicroPoll::Ready(direction) = self.receiver.poll(task_id) {
+                        self.shift(direction);
+                        self.state = LedState::Toggle;
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        MicroPoll::Pending
     }
 }

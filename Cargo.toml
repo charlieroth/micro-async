@@ -12,6 +12,7 @@ embedded-hal = { version = "1.0.0" }
 microbit-v2 = { version = "0.15.1" }
 fugit = { version = "0.3.7" }
 critical-section = { version = "1.2.0" }
+heapless = { version = "0.8.0" }
 
 [features]
 trigger-overflow = []
