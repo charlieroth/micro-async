@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+mod time;
+
 use cortex_m_rt::entry;
 use embedded_hal::{
     delay::DelayNs,
