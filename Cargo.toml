@@ -9,13 +9,16 @@ cortex-m-rt = { version = "0.7.5" }
 rtt-target = { version = "0.6.1" }
 panic-rtt-target = { version = "0.2.0" }
 embedded-hal = { version = "1.0.0" }
-microbit-v2 = { version = "0.15.1" }
 fugit = { version = "0.3.7" }
 critical-section = { version = "1.2.0" }
 heapless = { version = "0.8.0" }
 futures = { version = "0.3.31", default-features = false, features = [
     "async-await",
 ] }
+embassy-nrf = { version = "0.3.1", features = ["nrf52833", "time-driver-rtc1", "gpiote"] }
+embassy-time = "0.4.0"
+embassy-sync = "0.6.1"
+embassy-executor = { version = "0.7.0", features = ["arch-cortex-m", "executor-thread"] }
 
 [features]
 trigger-overflow = []
